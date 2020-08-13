@@ -1,0 +1,688 @@
+---
+title: "Porównanie technik estymacji VaR"
+author: "Artur Karamon"
+date: "8 kwietnia 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+# ³adowanie bibliotek
+library("readr")
+library("ggplot2")
+library("lubridate")
+library("tseries")
+library("nortest")
+library("timeDate")
+library("PerformanceAnalytics")
+library("GAS")
+library("FactoMineR")
+library("factoextra")
+library("tidyr")
+library("dplyr")
+library("kableExtra")
+library("psych")
+library("grid")
+library("gridExtra")
+library("scales")
+``` 
+
+## Wprowadzenie
+
+Wraz z rozwojem bran¿y finansowej oraz ubezpieczeniowej pojawi³a siê potrzeba budowy prostego i intuicyjnego wskaŸnika, który mówi o ryzyku portfela. W ten sposób powsta³a Value at risk (wartoœæ zagro¿ona ryzykiem), czyli miara wyra¿aj¹ca graniczny poziom straty znaleziony dla ustalonego poziomu ufnoœci, bêd¹cego prawdopodobieñstwem jej osi¹gniêcia. Adaptacja modelu VaR na potrzeby analizy ryzyka zwi¹zanego z zaanga¿owaniem œrodków kredytowych w projekt inwestycyjny mo¿e byæ Ÿród³em interesuj¹cych informacji, wspomagaj¹cych decyzje zarówno kredytodawcy, jak i inwestora.<br>
+Istnieje wiele technik wyznaczania VaR, które ró¿ni¹ siê od siebie na poziomie strukturalnym. Niektóre z nich takie jak: **metoda historyczna**, **metoda historyczna z wagami**, **metoda EWMA** oraz **metoda bootstrap** przedstawiono oraz porównano w tej pracy. Dodatkowo wyestymowano równie¿ wartoœæ ES - expected shortfall, która okreœla oczekiwan¹ wielkoœæ straty. Do tych celów wykorzystano dane zawieraj¹ce dzienne kursy wybranych walut z lat 2012-2018.<br>
+
+Wybrane waluty :
+
+   * **Euro**(*EUR*) 
+   * **Korona Norweska**(*NOK*) 
+   * **Baht Tajski**(*THB*) 
+
+Dla ka¿dej waluty policzono stopy dzienne proste. Wszystkie dane umieszczono w tabeli, przedstawionej poni¿ej. Zbudowano te¿ wykresy pozwalaj¹ce na bardziej przejrzyst¹ obserwacjê.<br>   
+
+```{r, echo=FALSE, message=FALSE}
+#wczytanie danych
+
+waluty<- read_delim("E:/Studia/Sem. 6/IAR/projekt1/waluty_2012_2018.csv", 
+                               ";", escape_double = FALSE, trim_ws = TRUE)
+waluty$data<-ymd(waluty$data)
+
+kursy<-waluty$`1EUR`
+stopy_dzienne_proste<- (kursy[-1]-kursy[-length(kursy)])/kursy[-length(kursy)]
+stopy_df_EUR<-data.frame("data"=waluty$data[-1],"kurs"=kursy[-1],"stopy_dzienne_proste"=stopy_dzienne_proste)
+
+kursy<-waluty$`1NOK`
+stopy_dzienne_proste<- (kursy[-1]-kursy[-length(kursy)])/kursy[-length(kursy)]
+stopy_df_NOK<-data.frame("data"=waluty$data[-1],"kurs"=kursy[-1],"stopy_dzienne_proste"=stopy_dzienne_proste)
+
+kursy<-waluty$`1THB`
+stopy_dzienne_proste<- (kursy[-1]-kursy[-length(kursy)])/kursy[-length(kursy)]
+stopy_df_THB<-data.frame("data"=waluty$data[-1],"kurs"=kursy[-1],"stopy_dzienne_proste"=stopy_dzienne_proste)
+
+waluty_dane<-cbind(stopy_df_EUR,stopy_df_NOK[,c(2,3)],stopy_df_THB[,c(2,3)])
+names(waluty_dane)[2:7]<-c("kurs_EUR","stopy_dzienne_proste_EUR","kurs_NOK","stopy_dzienne_proste_NOK","kurs_THB","stopy_dzienne_proste_THB")
+```
+
+```{r,fig.align='center', echo=FALSE}
+#prezentacja danych
+
+cbind(waluty_dane[,1],round(waluty_dane[,-1],3)) %>%
+        mutate_if(is.numeric, function(x) {
+          cell_spec(x, bold = T, 
+                    color = spec_color(x, end = 1),
+                    font_size = spec_font_size(x))
+        }) %>%
+  kable(escape=F,digits=0, align = "c",col.names = c("data","kurs_EUR","stopy_dzien_proste_EUR","kurs_NOK","stopy_dzien_proste_NOK","kurs_THB","stopy_dzien_proste_THB")) %>% 
+  kable_styling(full_width = F,position="center",bootstrap_options = c("striped", "hover", "condensed", "responsive"))%>%
+  column_spec(1:5, width = "5cm")%>%
+  scroll_box( height = "300px")
+```
+
+```{r,fig.align='center', echo=FALSE}
+DF<-rbind(stopy_df_EUR,stopy_df_NOK,stopy_df_THB)
+DF<-cbind(DF,"waluta"=c(rep("EUR",nrow(stopy_df_EUR)),rep("NOK",nrow(stopy_df_NOK)),rep("THB",nrow(stopy_df_THB))))
+
+DF %>%
+  ggplot(aes(x=data,y=kurs,col=waluta))+
+  geom_line()+
+  ggtitle("Wykres kursów walut w latach 2012-2018")+
+  theme(plot.title = element_text(hjust = 0.5))
+  #labs(x = "miasto", y = "pozycja", colour="metoda")
+```
+
+```{r,fig.align='center', echo=FALSE}
+DF<-rbind(stopy_df_EUR,stopy_df_NOK,stopy_df_THB)
+DF<-cbind(DF,"waluta"=c(rep("EUR",nrow(stopy_df_EUR)),rep("NOK",nrow(stopy_df_NOK)),rep("THB",nrow(stopy_df_THB))))
+
+DF %>%
+  ggplot(aes(x=data,y=stopy_dzienne_proste,col=waluta))+
+  geom_line()+
+  ggtitle("Wykres stóp zwrotu walut w latach 2012-2018")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  facet_wrap(~waluta,ncol = 3)
+```
+
+<br>
+W celu lepszego zapoznania siê z otrzymanym zbiorem obliczono dla niego podstawowe statystyki opisowe, takie jak œrednia, mediana, odchylenie standardowe, kurtoza itp., a tak¿e wygenerowane wykresy pude³kowe oraz histogramy.  
+
+```{r, echo=FALSE}
+kable(describe(waluty_dane[,-1])[c(2:5,8:13)],digits=5, align = "c") %>% 
+  kable_styling(full_width = F,position="center",bootstrap_options = c("striped", "hover", "condensed", "responsive"))%>%
+  row_spec(1:2, bold = T, color = "black", background = "#F08080")%>%
+  row_spec(3:4, bold = T, color = "black", background = "lightgreen")%>%
+  row_spec(5:6, bold = T, color = "black", background = "lightblue")%>%
+  add_header_above(c("Tabela statystyk opisowych" = 11))
+```
+
+```{r ,fig.align='center',fig.width=8,out.extra='angle=90', echo=FALSE}
+w1<-waluty_dane%>%
+  ggplot(aes(x = "EUR", y = kurs_EUR)) +
+  geom_boxplot(fill="#F08080")+
+  labs(x="",y="kurs")
+w2<-waluty_dane%>%
+  ggplot(aes(x = "NOK", y = kurs_NOK)) +
+  geom_boxplot(fill="lightgreen")+
+  labs(x="",y="")
+w3<-waluty_dane%>%
+  ggplot(aes(x = "THB", y = kurs_THB)) +
+  geom_boxplot(fill="lightblue")+
+  labs(x="",y="")
+
+
+grid.arrange(w1, w2, w3, 
+             ncol = 3, nrow = 1,top=textGrob("Wykresy pude³kowe dla kursów walut", gp=gpar(fontsize=12)))
+```
+
+```{r ,fig.align='center',fig.width=8,out.extra='angle=90', echo=FALSE}
+w1<-waluty_dane%>%
+  ggplot(aes(x = "EUR", y = stopy_dzienne_proste_EUR)) +
+  geom_boxplot(fill="#F08080")+
+  labs(x="",y="stopy dzienne proste")
+w2<-waluty_dane%>%
+  ggplot(aes(x = "NOK", y = stopy_dzienne_proste_NOK)) +
+  geom_boxplot(fill="lightgreen")+
+  labs(x="",y="")
+w3<-waluty_dane%>%
+  ggplot(aes(x = "THB", y = stopy_dzienne_proste_THB)) +
+  geom_boxplot(fill="lightblue")+
+  labs(x="",y="")
+
+
+grid.arrange(w1, w2, w3, 
+             ncol = 3, nrow = 1,top=textGrob("Wykresy pude³kowe dla stóp zwrotu walut", gp=gpar(fontsize=12)))
+```
+
+```{r,fig.align='center',out.extra='angle=90', echo=FALSE}
+w<-c()
+waluty_dane1<-waluty_dane[,-c(1,3,5)]
+for (i in 1:(ncol(waluty_dane1))) {
+  breaks <- pretty(range(waluty_dane1[,i]), n = nclass.FD(waluty_dane1[,i]), min.n = 1)
+  bwidth <- breaks[2]-breaks[1]
+  w[i]<-bwidth
+}
+
+w1<-waluty_dane%>%
+  ggplot(aes(kurs_EUR)) +
+  geom_histogram(binwidth=w[1],fill="#F08080")+
+  labs(y="",x="EUR")
+w2<-waluty_dane%>%
+  ggplot(aes(kurs_NOK)) +
+  geom_histogram(binwidth=w[2],fill="lightgreen")+
+  labs(y="",x="NOK")
+w3<-waluty_dane%>%
+  ggplot(aes(kurs_THB)) +
+  geom_histogram(binwidth=w[3],fill="lightblue")+
+  labs(y="",x="THB")
+
+
+grid.arrange(w1, w2, w3, 
+             ncol = 1, nrow = 3,top=textGrob("Histogramy dla kursów walut", gp=gpar(fontsize=12)))
+```
+
+```{r,fig.align='center',out.extra='angle=90', echo=FALSE}
+w<-c()
+waluty_dane1<-waluty_dane[,-c(1,2,4,6)]
+for (i in 1:(ncol(waluty_dane1))) {
+  breaks <- pretty(range(waluty_dane1[,i]), n = nclass.FD(waluty_dane1[,i]), min.n = 1)
+  bwidth <- breaks[2]-breaks[1]
+  w[i]<-bwidth
+}
+
+w1<-waluty_dane%>%
+  ggplot(aes(stopy_dzienne_proste_EUR)) +
+  geom_histogram(binwidth=w[1],fill="#F08080")+
+  labs(y="",x="EUR")
+w2<-waluty_dane%>%
+  ggplot(aes(stopy_dzienne_proste_NOK)) +
+  geom_histogram(binwidth=w[2],fill="lightgreen")+
+  labs(y="",x="NOK")
+w3<-waluty_dane%>%
+  ggplot(aes(stopy_dzienne_proste_THB)) +
+  geom_histogram(binwidth=w[3],fill="lightblue")+
+  labs(y="",x="THB")
+
+
+grid.arrange(w1, w2, w3, 
+             ncol = 1, nrow = 3,top=textGrob("Histogramy dla stóp zwrotu walut", gp=gpar(fontsize=12)))
+```
+
+Na podstawie otrzymanych statystyk oraz wykresów mo¿na wyci¹gn¹æ cenne informacje. Naj³atwiej zauwa¿alne s¹ doœæ zró¿nicowane wartoœci œrednich kursów ka¿dej waluty. Jest to zrozumia³e, gdy¿ euro jest zdecydowanie "mocniejsz¹" walut¹ ni¿ pozosta³e. Rownie¿ wahania(zmiennoœæ) kursu w przypadku euro s¹ najwiêksze, co ma swoje potwierdzenie w odchyleniu standardowym. Jednak¿e ju¿ w przypadku stóp zwrotu euro w tej  samej statystyce osi¹ga najni¿sze rezultaty. Ogólnie w przypadku stóp zwrotu mo¿na stwierdziæ, ¿e s¹ one zbli¿one dla wszystkich walut, szczególnie NOK i THB. Œrednie wartoœci niewiele ró¿ni¹ siê od 0. Jedynie THB uzyskuje dodatni¹ œredni¹ dzienn¹ stopê zwrotu. Na podstawie wykresów pude³kowych mo¿na stwierdziæ, ¿e o ile w przypadku kursów wartoœci odstaj¹ce wystêpuj¹ doœæ rzadko, to dla stóp zwrotu pojawiaj¹ siê bardzo czêsto. Ciekawe wnioski mo¿na wsnuæ równie¿ w przypadku rozk³adów zmiennych. Rozk³ady stóp zwrotu zdecydowanie bardziej przypominaj¹ rozk³ad normalny oraz cechuj¹ siê bardzo silnym skupieniem wartoœci wokó³ œredniej, czego dowodem s¹ wysokie wartoœci kurtozy. Dodatkowo rozk³ady te dla ka¿dej z walut s¹ podobne do siebie. Na podstawie tego mo¿na zauwa¿yæ wspólne cechy, jakimi odznaczaj¹ siê stopy zwrotu. Rozk³ady kursów s¹ zdecydowanie bardziej równomiernie roz³o¿one, brak w nich wyraŸnych podobieñstw miêdzy sob¹.
+
+## Analiza i wizualizacja
+
+Do estymacji wartoœci VaR oraz ES wykorzystano 4 ró¿ne metody. S¹ to:
+   
+   * **metoda historyczna** - wykorzystuje klasyczne podejœcie polegaj¹ce na wyznaczeniu odpowiedniego 99% kwantyla empirycznego rozk³adu zwrotów, zak³ada, ¿e którychœ z wczeœniej zaistnia³ych historycznie scenariuszy powtórzy siê,   
+   * **metoda historyczna z wagami** - bardzo podobna do metody historycznej, jednak bierze pod uwagê "swie¿oœæ" informacji, tworzony jest ci¹g geometryczny wag, które nadaj¹ wiêkszy wp³yw na wynik nowszym obserwacjom, o szybkoœci wzrostu wag decyduje parametr q(bliski zeru),  
+   * **metoda EWMA** - nale¿y do tzw. metod parametrycznych, uwzglêdnia zmiennoœæ obserwacji i odrzuca za³o¿enie o sta³oœci wariancji w czasie, warunkowa wariancja estymowana jest jako wyk³adniczo wa¿ona œrednia jej wczeœniejszych wartoœci,
+   * **metoda bootstrap** - polega na wielokrotnym losowaniu ze zwracaniem wartoœci stóp zwrotu, a nastêpnie obliczaniu 99% kwantyla oraz uœrednienie jego wartoœci, które mog¹ okazaæ siê nieco dok³adniejsze, jest wykorzystywana w przypadku ma³ej licznoœci obserwacji.
+   
+W badaniu wszystkie metody przeprowadzane s¹ kolejnych 500-elementowych okien obserwacji, w skutek czego otrzymywany jest wektory wartoœci VaR i ES. Pozwala to na lepsz¹ ocenê wykorzystanych metod oraz wizualizacjê wyników.  
+   
+###Metoda historyczna
+
+Do przeprowadzenia estymacji VaR oraz ES pos³u¿ono siê wczeœniej skonstruowan¹ funkcj¹, zaprezentowan¹ poni¿ej. Funkcja oblicza Value at Risk (VaR) jako kwantyl 0.01 stóp zwrotu oraz Expected Shortfall (ES).
+
+```{r}
+var_es_hist<-function(stopy_df){
+
+  v_var<-NULL
+  v_es<-NULL
+  
+  # pêtla iteruj¹ca po oknach
+  for (s in 1:(nrow(stopy_df)-499)) {
+    okno<-stopy_df[s:(s+499),]
+    
+    #obliczenie varu
+    var<-quantile(okno$stopy_dzienne_proste,0.01,type=7)
+    v_var<-c(v_var,var)
+    
+    #obliczenie es
+    ES<-mean(okno[okno$stopy_dzienne_proste<var,3])
+    v_es<-c(v_es,ES)
+  }
+  
+  #zapisanie danych do ramki danych
+  result_df<-stopy_df[501:nrow(stopy_df),]
+  result_df$VAR<-v_var[-length(v_var)]
+  result_df$ES<-v_es[-length(v_es)]
+  colnames(result_df)[1]<-"data_pocz"
+  result_df$data_kon<-stopy_df$data[-c(1:499,length(stopy_df$data))]
+  result_df<-result_df[,c("data_pocz","data_kon","kurs","stopy_dzienne_proste","VAR","ES")]
+  
+}
+```
+
+Funkcji u¿yto dla ka¿dej z walut i otrzymano wyniki zaprezentowane na wykresach:
+
+```{r, echo=FALSE}
+EUR_df<-var_es_hist(stopy_df_EUR)
+NOK_df<-var_es_hist(stopy_df_NOK)
+THB_df<-var_es_hist(stopy_df_THB)
+
+n<-nrow(EUR_df)
+waluta_v<-c(rep("EUR",n),rep("NOK",n),rep("THB",n))
+
+var_es_df<-data.frame("wartosc"=c(EUR_df$VAR,NOK_df$VAR,THB_df$VAR,EUR_df$ES,NOK_df$ES,THB_df$ES),"waluta"=rep(waluta_v,2),"data_poczatku_okna"=rep(EUR_df$data_pocz,2),"miara"=factor(c(rep("VAR",length(waluta_v)),rep("ES",length(waluta_v))),c("VAR","ES")))
+```
+
+```{r,fig.align='center',fig.width=9,out.extra='angle=90', echo=FALSE}
+ggplot(var_es_df,aes(y=wartosc,x=data_poczatku_okna,col=waluta))+
+  geom_line()+
+  facet_wrap(~miara,ncol = 2)
+``` 
+
+Wyniki uzyskane na podstawie tej metody wydaj¹ siê byæ proste i logiczne. Elementem charakterystycznym, widocznym na wykresie jest "schodkowatoœæ" krzywej VaRu. Jej zmiany s¹ raczej niewielkie. Dodatkowo w doœæ d³ugich okresach ma ona postaæ sta³ej. Wartoœci ES maj¹ podobny wygl¹d, ale s¹ mniejsze od VaR, co jest zgodne z konstrukcj¹ metody jego estymacji.
+<br>
+
+###Metoda historyczna z wagami
+
+Kolejna metoda jest jedynie udoskonaleniem poprzedniej. Funkcja dzia³a podobnie, z t¹ ró¿nic¹, ¿e stopom przyporz¹dkowane s¹ wagi, oznaczaj¹ce prawdopodobieñstwa ich wyst¹pienia, a kwantyl liczony jest "rêcznie" poprzez wskazanie momentu, gdy skumulowana suma  posortowanych  wg. stóp zwrotu wag przekracza przyjêty poziom 0.01.
+
+```{r}
+var_es_hist_wag<-function(stopy_df, q=0.995){
+  
+  v_var<-NULL
+  v_es<-NULL
+
+  #pêtla iteruj¹ca po oknach
+  for (s in 1:(nrow(stopy_df)-499)) {
+    okno<-stopy_df[s:(s+499),]
+    i<-1:nrow(okno)
+    n<-nrow(okno)
+    
+    #wyznaczenie wag
+    wagi<-(q^(n-i))*(1-q)/(1-(q^n))
+    
+    #ustalenie kolejnosci obserwacji
+    kolejnosc<-rank(okno$stopy_dzienne_proste,ties.method="first")
+    wagi[kolejnosc]<-wagi
+    #obliczenie var
+    var<-min(sort(okno$stopy_dzienne_proste)[cumsum(wagi)>0.01])
+
+    v_var<-c(v_var,var)
+    
+    #obliczenie es
+    wagi_es<-wagi[cumsum(wagi)<0.01]/0.01
+    wagi_es<-c(wagi_es,1-sum(wagi_es))
+    ES<-sum(wagi_es*okno$stopy_dzienne_proste[okno$stopy_dzienne_proste<=var])
+    v_es<-c(v_es,ES)
+  }
+  
+  #zapisanie danych do ramki danych
+  result_df<-stopy_df[501:nrow(stopy_df),]
+  result_df$VAR<-v_var[-length(v_var)]
+  result_df$ES<-v_es[-length(v_es)]
+  colnames(result_df)[1]<-"data_pocz"
+  result_df$data_kon<-stopy_df$data[-c(1:499,length(stopy_df$data))]
+  result_df<-result_df[,c("data_pocz","data_kon","kurs","stopy_dzienne_proste","VAR","ES")]
+
+}
+```
+
+Tak samo jak poprzednio u¿yta zostaje ona dla ka¿dej z walut. Otrzymuje siê nastêpuj¹ce wyniki:
+
+```{r, echo=FALSE}
+EUR_df_wag<-var_es_hist_wag(stopy_df_EUR)
+NOK_df_wag<-var_es_hist_wag(stopy_df_NOK)
+THB_df_wag<-var_es_hist_wag(stopy_df_THB)
+
+n<-nrow(EUR_df)
+waluta_v<-c(rep("EUR",n),rep("NOK",n),rep("THB",n))
+
+var_es_df_wag<-data.frame("wartosc"=c(EUR_df_wag$VAR,NOK_df_wag$VAR,THB_df_wag$VAR,EUR_df_wag$ES,NOK_df_wag$ES,THB_df_wag$ES),"waluta"=rep(waluta_v,2),"data_poczatku_okna"=rep(EUR_df_wag$data_pocz,2),"miara"=factor(c(rep("VAR",length(waluta_v)),rep("ES",length(waluta_v))),c("VAR","ES")))
+```
+
+```{r,fig.align='center',fig.width=9,out.extra='angle=90', echo=FALSE}
+ggplot(var_es_df_wag,aes(y=wartosc,x=data_poczatku_okna,col=waluta))+
+  geom_line()+
+  facet_wrap(~miara,ncol=2)
+``` 
+
+Na podstawie wykresów zaobserwowaæ mo¿na, ¿e w tej metodzie zarówno wartoœci VaRu, jak i ES s¹ bardziej zró¿nicowane. Niejednokrotnie pojawiaj¹ siê znaczne skoki tych miar. W przypadku ES zanik³a "schodkowatoœæ" i zmiany tej wartoœci sta³y siê bardziej p³ynne. Podobnie jak poprzednio widoczne s¹ ró¿nice dla poszczególnych walut. 
+<br>
+
+###Metoda uwzglêdniaj¹ca heteroskedastycznoœæ(EWMA)
+
+Ta metoda wykorzystuje wyk³adniczo wa¿on¹ œredni¹ ruchom¹. Funkcja dla niej skonstruowana wylicza VaR jako kwantyl ze skorygowanych o zmiennoœæ stóp zwrotu. Podobnie dla ES. Funkcja wykorzystuje sta³y wspó³czynnik lambda, ustalony domyœlnie na 0.94.
+
+```{r}
+var_es_ewma<-function(stopy_df, lambda=0.94){
+  
+  v_var<-NULL
+  v_es<-NULL
+  
+  #pêtla iteruj¹ca po oknach
+  for (s in 1:(nrow(stopy_df)-499)) {
+    okno<-stopy_df[s:(s+499),]
+    
+    rets<-okno$stopy_dzienne_proste
+    n <- length(rets)+1
+    sig.s <- rep(sd(rets), n)
+    
+    #pêtla obliczaj¹ca zmiennoœæ kolejnych stóp
+    for (i in 2:n) {
+      sig.s[i] <- sqrt(((sig.s[i-1]^2)*lambda) + ((rets[i-1]^2)*(1 - lambda)))
+    }
+    
+    #skorygowanie wartoœci stóp o stosunek sigmy do sigmy przysz³ej stopy
+    wartosci<-(rets*sig.s[n])/sig.s[1:(n-1)]
+
+    #obliczenie varu
+    var<-quantile(wartosci,0.01)
+    v_var<-c(v_var,var)
+    
+    #obliczenie es
+    ES<-mean(wartosci[wartosci<var])
+    v_es<-c(v_es,ES)
+  }
+  
+  #zapisanie danych do ramki danych
+  result_df<-stopy_df[501:nrow(stopy_df),]
+  result_df$VAR<-v_var[-length(v_var)]
+  result_df$ES<-v_es[-length(v_es)]
+  colnames(result_df)[1]<-"data_pocz"
+  result_df$data_kon<-stopy_df$data[-c(1:499,length(stopy_df$data))]
+  result_df<-result_df[,c("data_pocz","data_kon","kurs","stopy_dzienne_proste","VAR","ES")]
+  
+  return(result_df)
+}
+```
+
+Funkcja daje nastêpuj¹ce rezultaty:
+
+```{r, echo=FALSE}
+EUR_df_ewma<-var_es_ewma(stopy_df_EUR)
+NOK_df_ewma<-var_es_ewma(stopy_df_NOK)
+THB_df_ewma<-var_es_ewma(stopy_df_THB)
+
+n<-nrow(EUR_df_ewma)
+waluta_v<-c(rep("EUR",n),rep("NOK",n),rep("THB",n))
+
+var_es_df_ewma<-data.frame("wartosc"=c(EUR_df_ewma$VAR,NOK_df_ewma$VAR,THB_df_ewma$VAR,EUR_df_ewma$ES,NOK_df_ewma$ES,THB_df_ewma$ES),"waluta"=rep(waluta_v,2),"data_poczatku_okna"=rep(EUR_df_ewma$data_pocz,2),"miara"=factor(c(rep("VAR",length(waluta_v)),rep("ES",length(waluta_v))),c("VAR","ES")))
+```
+
+```{r,fig.align='center',fig.width=9,out.extra='angle=90', echo=FALSE}
+ggplot(var_es_df_ewma,aes(y=wartosc,x=data_poczatku_okna,col=waluta))+
+  geom_line()+
+  facet_wrap(~miara,ncol=2)
+``` 
+
+Patrz¹c na skalê widaæ, ¿e otrzymane wyniki s¹ jeszcze bardziej zró¿nicowane w porównaniu z poprzednimi metodami. Bliskie sobie w czasie wartoœci VaRu znacznie siê od siebie ró¿ni¹. Mo¿na odnieœæ wra¿enie braku stabilnoœci wyników i chaotycznych, nag³ych zmian wskaŸników.  
+<br>
+
+###Metoda bootstrap
+
+Funkcja utworzona dla tej metody przeprowadza ustalon¹ iloœæ symulacji (domyœlnie 100) dla ka¿ego okna. W ka¿dej symulacji losowana jest ze zwracaniem ustalona iloœæ stóp z danego okna (domyœlnie 500) i liczone s¹ dla nich VaR oraz ES. Na koñcu funkcja uœrednia otrzymane wyniki.
+
+```{r}
+var_es_boot<-function(stopy_df,n=500,N=100){
+  
+  v_var<-NULL
+  v_es<-NULL
+  
+  #pêtla iteruj¹ca po oknach
+  for (s in 1:(nrow(stopy_df)-499)) {
+    okno<-stopy_df[s:(s+499),]
+    
+    v_var_los<-NULL
+    v_es_los<-NULL
+    
+    #pêtla wywo³uj¹ca kolejne symulacje
+    for (i in 1:N) {
+      #losowanie 500 stóp zwrotu ze zwracaniem
+      stopy_los<-sample(x = okno$stopy_dzienne_proste, size = n, replace=T)
+      
+      #obliczenie varu dla wylosowanych stóp
+      var_los<-quantile(stopy_los,0.01)
+      v_var_los<-c(v_var_los,var_los)
+      
+      #obliczenie es dla wylosowanych stóp
+      ES_los<-mean(stopy_los[stopy_los<=var_los])
+      v_es_los<-c(v_es_los,ES_los)
+    }
+    
+    #obliczenie œrednich wartoœci varu i es
+    var<-mean(v_var_los)
+    ES<-mean(v_es_los)
+    v_var<-c(v_var,var)
+    v_es<-c(v_es,ES)
+    
+  }
+  #zapisanie danych do ramki danych
+  result_df<-stopy_df[501:nrow(stopy_df),]
+  result_df$VAR<-v_var[-length(v_var)]
+  result_df$ES<-v_es[-length(v_es)]
+  colnames(result_df)[1]<-"data_pocz"
+  result_df$data_kon<-stopy_df$data[-c(1:499,length(stopy_df$data))]
+  result_df<-result_df[,c("data_pocz","data_kon","kurs","stopy_dzienne_proste","VAR","ES")]
+}
+```
+
+Funkcjê u¿yto dla wszystkich walut:
+
+```{r, echo=FALSE}
+EUR_df_boot<-var_es_boot(stopy_df_EUR)
+NOK_df_boot<-var_es_boot(stopy_df_NOK)
+THB_df_boot<-var_es_boot(stopy_df_THB)
+
+n<-nrow(EUR_df_boot)
+waluta_v<-c(rep("EUR",n),rep("NOK",n),rep("THB",n))
+
+var_es_df_boot<-data.frame("wartosc"=c(EUR_df_boot$VAR,NOK_df_boot$VAR,THB_df_boot$VAR,EUR_df_boot$ES,NOK_df_boot$ES,THB_df_boot$ES),"waluta"=rep(waluta_v,2),"data_poczatku_okna"=rep(EUR_df_boot$data_pocz,2),"miara"=factor(c(rep("VAR",length(waluta_v)),rep("ES",length(waluta_v))),c("VAR","ES")))
+```
+
+```{r,fig.align='center',fig.width=9,out.extra='angle=90', echo=FALSE}
+ggplot(var_es_df_boot,aes(y=wartosc,x=data_poczatku_okna,col=waluta))+
+  geom_line()+
+  facet_wrap(~miara,ncol=2)
+``` 
+
+Ta metoda daje rezultaty przypominaj¹ce metodê historyczn¹ Jednak maj¹ one niewielkie wahania, których rozmiar prawdopodobnie zale¿y od liczby przeprowadzanych symulacji. Im wiêksza ich liczba tym mocniejsze wyg³adzenie krzywej. Mo¿na przypuszczaæ, ¿e wyniki tej metody bêd¹ cechowaæ siê du¿¹ skutecznoœci¹, szczególnie, ¿e wykorzystuje siê j¹ w przypadku ma³ej iloœci danych, a tutaj ten problem nie wystêpuje..
+<br>
+
+###Testy wsteczne i porównanie
+
+Na tym etapie pracy porównano wykorzystane wczeœniej podejœcia estymacji wartoœci nara¿onej na ryzyko. Oprócz wizualnego zestawienia wszystkich technik, przydatne s¹ tutaj równie¿ testy wsteczne(backtesting) oraz inne.
+
+Testy, które u¿yto w tym celu, to :
+
+   * **Test Kupca** - statystyka tego testu opiera siê na log. wiarogodnoœci i posiada rozk³ad chi kwadrat z 1 st. swobody, test sprawdza czy wyj¹tki nie pojawiaj¹ siê za czêsto oraz za rzadko,
+   * **Test Christoffersena** - pozwala okreœliæ, czy przekroczenia backtestingu s¹ niezale¿ne w czasie, statystyka tego testu równie¿ ma rozk³ad asymptotycznie zmierzaj¹cy do chi kwadrat z 1 st. swobody,
+   * **Test Zasiêgu** - pozwala wyszczególniæ, czy w teœcie pojawi³a siê zbyt du¿a, b¹dŸ zbyt ma³a liczba wyj¹tków,
+   * **Test Wartoœci Rzeczywistych** - sprawdza, jak model radzi sobie dla wartoœci rzeczywistej, czyli wartoœci stopy w kolejnym dniu.
+
+Dla ka¿dego z testów stworzono funkcjê pozwalaj¹c¹ na jego przeprowadzenie.
+
+```{r}
+KupiecTest<-function(stopy_v,VAR,alpha=0.01){
+  N <- length(stopy_v)
+  przekroczenia_v <- numeric(N)
+  
+  #wyznaczenie wektora przekroczeñ
+  przekroczenia_v[which(stopy_v <= VAR)] <- 1
+  
+  N2 <- sum(przekroczenia_v)
+  stos <- N2/N
+  
+  #obliczenie statystyki testu
+  test <- 2 * log(((1 - stos)^(N - N2) * stos^N2)/((1 - alpha)^(N - N2) * alpha^N2))
+  
+  #obliczenie pvalue
+  pvalue <- 1-pchisq(test, df = 1)
+
+  vect_res <- c(test,pvalue)
+}
+
+ChristoffersenTest<-function(stopy_v,VAR,alpha=0.01){
+  N <- length(stopy_v)
+  przekroczenia_v <- numeric(N)
+  
+  #wyznaczenie wektora przekroczeñ
+  przekroczenia_v[which(stopy_v <= VAR)] <- 1
+  
+  n00 = n01 = n10 = n11 = 0
+  for (i in 2:N) {
+    if (przekroczenia_v[i] == 0 & przekroczenia_v[i - 1] == 0) 
+      n00 <- n00 + 1
+    if (przekroczenia_v[i] == 0 & przekroczenia_v[i - 1] == 1) 
+      n01 <- n01 + 1
+    if (przekroczenia_v[i] == 1 & przekroczenia_v[i - 1] == 0) 
+      n10 <- n10 + 1
+    if (przekroczenia_v[i] == 1 & przekroczenia_v[i - 1] == 1) 
+      n11 <- n11 + 1
+  }
+  
+  pi0 <- n01/(n00 + n01)
+  pi1 <- n11/(n10 + n11)
+  pi <- (n01 + n11)/(n00 + n01 + n10 + n11)
+  
+  #obliczenie statystyki testu
+  test1 <- -2 * log(((1 - pi)^(n00 + n10) * pi^(n01 + n11))/((1 - pi0)^n00 * pi0^n01 * (1 - pi1)^n10 * pi1^n11))
+
+  #obliczenie pvalue
+  pvalue <- 1-pchisq(test1, df = 1)
+  vect_res <- c(test1, pvalue)
+}
+
+ZasiegTest<-function(stopy_v,VAR,alpha=0.01){
+  N <- length(stopy_v)
+  
+  #wyznaczenie wektora przekroczeñ
+  l_przekroczen<-sum(stopy_v <= VAR)
+  prawd<-alpha
+  
+  #obliczanie prawdopodobieñstw zbyt du¿ej i zbyt ma³ej liczby wyj¹tków
+  wiele_wyj<-1-pbinom(l_przekroczen-1,N,prawd,TRUE)
+  malo_wyj<-pbinom(l_przekroczen,N,prawd,TRUE)
+
+  vect_res <- c(wiele_wyj,malo_wyj)
+}
+
+``` 
+
+```{r, echo=FALSE}
+testowanie_wsteczne<-function(stopy,VAR_v,alpha=0.01){
+  test_res_v1<-NULL
+  test_res_v2<-NULL
+  test_res_v3<-NULL
+  test_res_v3a<-NULL
+  test_res_v4<-NULL
+
+  for (i in 1:(length(stopy)-500)) {
+    okno<-stopy[i:(i+499)]
+    
+    test_res1<-KupiecTest(okno,VAR_v[i],alpha)[2]>0.01
+    test_res_v1[i]<-test_res1
+
+    test_res2<-ChristoffersenTest(okno,VAR_v[i],alpha)[2]>0.01
+    test_res_v2[i]<-test_res2
+    
+    test_res3<-(ZasiegTest(okno,VAR_v[i],alpha)[1]>0.01)
+    test_res3a<-(ZasiegTest(okno,VAR_v[i],alpha)[2]>0.01)
+    test_res_v3[i]<-test_res3
+    test_res_v3a[i]<-test_res3a
+    
+    test_res4<-VAR_v[i]>stopy[500+i]
+    test_res_v4[i]<-test_res4
+  }
+  
+  res1<-percent(round(1-mean(test_res_v1),4),0.01)
+  res2<-percent(round(1-mean(test_res_v2),4),0.01)
+  res3<-paste0(percent(round(1-mean(test_res_v3),4),0.01)," / ",percent(round(1-mean(test_res_v3a),4),0.01))
+  res4<-percent(round(mean(test_res_v4,na.rm=TRUE),4),0.01)
+  
+  res<-c(res1,res2,res3,res4)
+}
+```
+
+Nastêpnie z wykorzystaniem wczeœniejszych funkcji dla wszystkich metod i walut stworzono tabele testów, zawieraj¹ce ich wyniki. Przedstawiono równie¿ wykresy porównawcze metod.
+
+```{r,fig.align='center', echo=FALSE}
+testy_df<-data.frame("metoda estymacji"=c("historyczna","historyczna z wagami", "bootstrap","ewma"),
+                     "test Kupca"=c(testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df$VAR)[1],testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df_wag$VAR)[1],testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df_boot$VAR)[1],testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df_ewma$VAR)[1]),
+                     "test Christoffersena"=c(testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df$VAR)[2],testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df_wag$VAR)[2],testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df_boot$VAR)[2],testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df_ewma$VAR)[2]),
+                     "test Zasiêgu"=c(testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df$VAR)[3],testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df_wag$VAR)[3],testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df_boot$VAR)[3],testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df_ewma$VAR)[3]),
+                     "test Wart Rzecz"=c(testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df$VAR)[4],testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df_wag$VAR)[4],testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df_boot$VAR)[4],testowanie_wsteczne(stopy_df_EUR$stopy_dzienne_proste,EUR_df_ewma$VAR)[4]))
+
+testy_df  %>%
+          kable(escape=F,digits=0, align = "c",col.names = c("metoda","test Kupca","test Christoffersena","test zasiêgu (zbyt wiele/ma³o wyj)","test wartoœci rzeczywistych")) %>% 
+  kable_styling(full_width = F,position="center",bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  add_header_above(c("Wyniki testów dla EUR" = 5))%>%
+  column_spec(1:5, width = "5cm")
+``` 
+
+```{r,fig.align='center', echo=FALSE}
+testy_df<-data.frame("metoda estymacji"=c("historyczna","historyczna z wagami", "bootstrap","ewma"),
+                     "test Kupca"=c(testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df$VAR)[1],testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df_wag$VAR)[1],testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df_boot$VAR)[1],testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df_ewma$VAR)[1]),
+                     "test Christoffersena"=c(testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df$VAR)[2],testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df_wag$VAR)[2],testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df_boot$VAR)[2],testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df_ewma$VAR)[2]),
+                     "test Zasiêgu"=c(testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df$VAR)[3],testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df_wag$VAR)[3],testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df_boot$VAR)[3],testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df_ewma$VAR)[3]),
+                     "test Wart Rzecz"=c(testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df$VAR)[4],testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df_wag$VAR)[4],testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df_boot$VAR)[4],testowanie_wsteczne(stopy_df_NOK$stopy_dzienne_proste,NOK_df_ewma$VAR)[4]))
+
+testy_df  %>%
+          kable(escape=F,digits=0, align = "c",col.names = c("metoda","test Kupca","test Christoffersena","test zasiêgu (zbyt wiele/ma³o wyj)","test wartoœci rzeczywistych")) %>% 
+  kable_styling(full_width = F,position="center",bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  add_header_above(c("Wyniki testów dla NOK" = 5))%>%
+  column_spec(1:5, width = "5cm")
+``` 
+
+```{r,fig.align='center', echo=FALSE}
+testy_df<-data.frame("metoda estymacji"=c("historyczna","historyczna z wagami", "bootstrap","ewma"),
+                     "test Kupca"=c(testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df$VAR)[1],testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df_wag$VAR)[1],testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df_boot$VAR)[1],testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df_ewma$VAR)[1]),
+                     "test Christoffersena"=c(testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df$VAR)[2],testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df_wag$VAR)[2],testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df_boot$VAR)[2],testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df_ewma$VAR)[2]),
+                     "test Zasiêgu"=c(testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df$VAR)[3],testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df_wag$VAR)[3],testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df_boot$VAR)[3],testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df_ewma$VAR)[3]),
+                     "test Wart Rzecz"=c(testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df$VAR)[4],testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df_wag$VAR)[4],testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df_boot$VAR)[4],testowanie_wsteczne(stopy_df_THB$stopy_dzienne_proste,THB_df_ewma$VAR)[4])
+                     )
+
+testy_df %>%
+          kable(escape=F,digits=0, align = "c",col.names = c("metoda","test Kupca","test Christoffersena","test zasiêgu (zbyt wiele/ma³o wyj)","test wartoœci rzeczywistych")) %>% 
+  kable_styling(full_width = F,position="center",bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  add_header_above(c("Wyniki testów dla THB" = 5))%>%
+  column_spec(1:5, width = "5cm")
+``` 
+
+```{r,fig.align='center',fig.width=9,out.extra='angle=90', echo=FALSE}
+DF<-data.frame("VAR"=c(EUR_df$VAR,EUR_df_wag$VAR,EUR_df_boot$VAR,EUR_df_ewma$VAR),"metoda"=c(rep("HIST",nrow(EUR_df)),rep("HIST WAG",nrow(EUR_df_wag)),rep("BOOT",nrow(EUR_df_boot)),rep("EWMA",nrow(EUR_df_ewma))),"data"=rep(EUR_df_wag$data_kon,4))
+ggplot(DF,aes(y=VAR,x=data,col=metoda))+
+  geom_line()+
+  geom_line(data=EUR_df,aes(x=data_pocz,y=stopy_dzienne_proste),col="black",alpha=0.2)+
+  ggtitle("Wykres dla EUR")+
+  theme(plot.title = element_text(hjust = 0.5))
+``` 
+
+```{r,fig.align='center',fig.width=9,out.extra='angle=90', echo=FALSE}
+DF<-data.frame("VAR"=c(NOK_df$VAR,NOK_df_wag$VAR,NOK_df_boot$VAR,NOK_df_ewma$VAR),"metoda"=c(rep("HIST",nrow(NOK_df)),rep("HIST WAG",nrow(NOK_df_wag)),rep("BOOT",nrow(NOK_df_boot)),rep("EWMA",nrow(NOK_df_ewma))),"data"=rep(NOK_df_wag$data_kon,4))
+ggplot(DF,aes(y=VAR,x=data,col=metoda))+
+  geom_line()+
+  geom_line(data=NOK_df,aes(x=data_pocz,y=stopy_dzienne_proste),col="black",alpha=0.2)+
+  ggtitle("Wykres dla NOK")+
+  theme(plot.title = element_text(hjust = 0.5))
+``` 
+
+```{r,fig.align='center',fig.width=9,out.extra='angle=90', echo=FALSE}
+DF<-data.frame("VAR"=c(THB_df$VAR,THB_df_wag$VAR,THB_df_boot$VAR,THB_df_ewma$VAR),"metoda"=c(rep("HIST",nrow(THB_df)),rep("HIST WAG",nrow(THB_df_wag)),rep("BOOT",nrow(THB_df_boot)),rep("EWMA",nrow(THB_df_ewma))),"data"=rep(THB_df$data_kon,4))
+
+ggplot(DF,aes(y=VAR,x=data,col=metoda))+
+  geom_line()+
+  geom_line(data=THB_df,aes(x=data_pocz,y=stopy_dzienne_proste),col="black",alpha=0.2)+
+  ggtitle("Wykres dla THB")+
+  theme(plot.title = element_text(hjust = 0.5))
+``` 
+
+**Obserwacje i interpretacja:**<br>
+Wykorzystane metody s¹ bardzo odmienne. Niektóre z nich tj. ewma czy historyczna z wagami maj¹ du¿¹ rozbie¿noœæ wartoœci. W metodzie ewma VaRy z pobliskich okien potrafi¹ ró¿niæ siê od siebie nawet kilkakrotnie. Natomiast metoda historyczna oraz bootstrap s¹ bardziej stabilne, nie maj¹ tak drastycznych zmian wartoœci. Dlatego te¿ te 2 metody wydaj¹ siê mieæ przewagê nad pozosta³ymi. Jednak¿e testy nie daj¹ jednoznacznej odpowiedzi. Test Kupca dla tych metod nie powinien byæ interpretowany, co wynika z za³o¿eñ wykorzystywanych przy konstrukcji tych metod. Dla metody historycznej z wagami b³êdnie zdefiniowany VaR pojawia siê w od ok. 2% do ok. 7% w zale¿noœci od waluty. Dziêki testowi zasiêgu wiadomo, ¿e b³êdy pojawiaj¹ siê jedynie za spraw¹ zbyt du¿ej liczby wyj¹tków. Znacznie gorzej wypada natomiast ewma, która dla testu Kupca notuje wyniki w okolicach 50%. Tutaj jako przyczyna niew³aœciwej klasyfikacji pojawia siê zbyt ma³a liczba wyj¹tków, ale wci¹¿ przewa¿a ich zbyt du¿a liczba. W teœcie wartoœci rzeczywistych najlepsze rezultaty daje metoda historyczna z wagami, s¹ one najbardziej zbli¿one do 1%. Bootstrap i metoda historyczna wypadaj¹ bardzo podobnie. Du¿ym zaskoczeniem jest metoda ewma, która nie odstaje znacz¹co od pozosta³ych, a dla euro osi¹ga niemal¿e idealny wynik. Pod wzglêdem testu Christoffersena wszystkie metody oceniane s¹ prawie bezb³êdnie. Oznacza to, ¿e nie ma problemów z niezale¿noœci¹ przekroczeñ w czasie. Jedynie w przypadku ewma dla NOK pojawia siê znikomy procent b³êdnych oszacowañ VaRu. 
+
+## Zakoñczenie 
+**Wnioski:**<br>
+Podsumowuj¹c, uzyskane wyniki s¹ doœæ zró¿nicowane, co daje mo¿liwoœci do ciekawej interpretacji.
+Nie mo¿na jednoznacznie stwierdziæ która z metod wypada najlepiej, szczególnie kieruj¹c siê testami wstecznymi. Natomiast, bior¹c pod uwagê test wartoœci rzeczywistych, który wydaje siê byæ najistotniejszym wyznacznikiem z praktycznego punktu widzenia, faworytem okazuje siê metoda historyczna z wagami. Zdecydowanie ³atwiejsza do wskazania jest najs³absza metoda. Ewma, mimo ¿e w teœcie wartoœci rzeczywistych wypada bardzo dobrze, to nie radzi sobie w testach wstecznych.Prawdopodobnie wynika to ze specyficznej cechy tej metody, któr¹ jest uwzglêdnienie heteroskedastycznoœci danych, pomijanej przez pozosta³e. Mo¿liwe, ¿e za du¿y nacisk po³o¿ony jest w³aœnie na tê cechê i warto by³o by zmodyfikowaæ korektê zmiennoœci poprzez zmianê parametru lambda.
+Dziêki wykorzystaniu kilku walut, które s¹ doœæ odmienne pod wzglêdem si³y nabywczej, stabilnoœci i wielu innych aspektów, mo¿liwe jest wnioskowanie na temat wykorzystania danej metody w stosunku do waluty. Najwiêcej poprawnych oszacowañ przypada na koronê norwesk¹. Nie³atwym okazuje siê natomiast wskazanie przes³anek to powoduj¹cych, gdy¿ statystyki charakteryzuj¹ce t¹ walutê nie wyró¿niaj¹ siê specjalnie na tle innych. Byæmo¿e jedynie bardzo wysoka kurtoza mo¿e odgrywaæ tu jak¹œ rolê.
+<br> 
+Badanie jest bardzo z³o¿one i pozwala na wiele mo¿liwoœci modyfikacji. Byæmo¿e pewne z nich pozwoli³y by na dok³adniejsze wyniki. Wp³yw na poprawnoœæ obliczeñ mog³y mieæ zastosowane uproszczenia, tj. liczba przejœæ pêtli, przyjmowane poziomy istotnoœci, wielkoœci innych wykorzystanych danych. Ewentualne dodatkowe b³êdy w analizie, mog³y wynikn¹æ z przybli¿eñ zastosowanych przez program.
+
+
+
+
